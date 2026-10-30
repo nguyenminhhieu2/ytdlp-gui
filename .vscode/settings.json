@@ -1,0 +1,11 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}\\venv\\Scripts\\python.exe",
+  "debug.internalConsoleOptions": "openOnSessionStart",
+  "code-runner.runInTerminal": false,
+  "code-runner.clearPreviousOutput": true,
+  "code-runner.saveFileBeforeRun": true,
+  "code-runner.showRunIconInEditorTitleMenu": true,
+  "code-runner.executorMap": {
+    "python": "\"$pythonPath\" -u"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: file hiện tại",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "internalConsole",
+      "justMyCode": true,
+      "python": "${workspaceFolder}\\venv\\Scripts\\python.exe"
+    }
+  ]
+}
