@@ -1,12 +1,17 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-import os
+from fastapi import BackgroundTasks
+import asyncio
 
-app = FastAPI()
-os.makedirs("downloads", exist_ok=True)
-templates = Jinja2Templates(directory="templates")
+def download_task(url: str):
+    # Tạm thời để trống hoặc gọi lại code của Ngày 3
+    # Hàm này sẽ chạy ngầm trong 1 thread riêng
+    pass
 
-@app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+@app.post("/api/download")
+async def start_download(request: Request, background_tasks: BackgroundTasks):
+    data = await request.json()
+    url = data.get("url")
+    
+    # Đẩy tác vụ vào background, dùng asyncio.to_thread để không block server
+    background_tasks.add_task(asyncio.to_thread, download_task, url)
+    
+    return {"message": "Đã bắt đầu tải ngầm!"}
