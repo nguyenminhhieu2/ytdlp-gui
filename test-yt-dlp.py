@@ -1,13 +1,18 @@
 import yt_dlp
 
+def my_hook(d):
+    if d['status'] == 'downloading':
+        percent = d.get('_percent_str', '0%').strip()
+        speed = d.get('_speed_str', 'N/A').strip()
+        print(f"Đang tải: {percent} | Tốc độ: {speed}")
+
 url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-    info = ydl.extract_info(url, download=False)
-    print("Tiêu đề:", info.get('title'))
-    print("Thời lượng:", info.get('duration'), "giây")
-    
-    # In ra các định dạng có sẵn
-    for f in info.get('formats', []):
-        if f.get('vcodec') != 'none':
-            print(f"ID: {f['format_id']} | Chất lượng: {f.get('format_note', 'N/A')}")
-            
+ydl_opts = {
+    'outtmpl': 'downloads/%(title)s.%(ext)s',
+    'progress_hooks': [my_hook],
+    # Sửa dòng 'format' ở đây:
+    'format': 'bestvideo+bestaudio/best', # Ưu tiên tải video+âm thanh tốt nhất, nếu không có thì lấy 'best'
+}
+
+with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    ydl.download([url])
