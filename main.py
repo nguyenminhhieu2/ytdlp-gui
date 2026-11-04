@@ -40,7 +40,8 @@ def download_task(url: str, websocket: WebSocket, loop: asyncio.AbstractEventLoo
     ydl_opts = {
         'outtmpl': 'downloads/%(title)s.%(ext)s',
         'progress_hooks': [progress_hook],
-        'format': 'bestvideo+bestaudio/best'
+        'format': 'bestvideo+bestaudio/best',
+        'cookiesfile': 'cookies.txt'
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -82,3 +83,5 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text() 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+

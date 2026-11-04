@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tải Video Đa Nền Tảng</title>
     <style>
-        /* Thêm CSS để giao diện đẹp hơn */
         body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; text-align: center; }
         .input-group { display: flex; gap: 10px; margin-bottom: 20px; }
         input[type="text"] { flex: 1; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 5px; }
@@ -27,7 +26,7 @@
         <button onclick="startDownload()" id="downloadBtn">Tải Xuống</button>
     </div>
 
-    <!-- Khung chứa thanh tiến trình (mặc định ẩn) -->
+<!-- thanh tiến trình -->
     <div class="progress-container" id="progressContainer">
         <progress id="progressBar" value="0" max="100"></progress>
         <div class="stats">
@@ -39,7 +38,7 @@
     </div>
 
     <script>
-        // Kết nối WebSocket
+//Kết nối websocket
         const ws = new WebSocket("ws://127.0.0.1:8000/ws");
 
         ws.onmessage = function(event) {
@@ -53,7 +52,6 @@
                 document.getElementById("speedText").innerText = data.speed;
             } 
             else if (data.status === "finished") {
-                // Sửa lỗi: Khi xong phải đẩy thanh bar lên 100%
                 document.getElementById("progressBar").value = 100;
                 document.getElementById("percentText").innerText = "100%";
                 document.getElementById("speedText").innerText = "";
