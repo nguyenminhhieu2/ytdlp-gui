@@ -1,17 +1,23 @@
-from fastapi import BackgroundTasks
-import asyncio
+from fastapi import WebSocket, WebSocketDisconnect
 
-def download_task(url: str):
-    # Tạm thời để trống hoặc gọi lại code của Ngày 3
-    # Hàm này sẽ chạy ngầm trong 1 thread riêng
-    pass
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
 
-@app.post("/api/download")
-async def start_download(request: Request, background_tasks: BackgroundTasks):
-    data = await request.json()
-    url = data.get("url")
-    
-    # Đẩy tác vụ vào background, dùng asyncio.to_thread để không block server
-    background_tasks.add_task(asyncio.to_thread, download_task, url)
-    
-    return {"message": "Đã bắt đầu tải ngầm!"}
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+manager = ConnectionManager()
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text() # Giữ kết nối luôn mở
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
