@@ -1,1 +1,102 @@
-<h2>Hello</h2>
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tải Video Đa Nền Tảng</title>
+    <style>
+        /* Thêm CSS để giao diện đẹp hơn */
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; text-align: center; }
+        .input-group { display: flex; gap: 10px; margin-bottom: 20px; }
+        input[type="text"] { flex: 1; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 5px; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 5px; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        .progress-container { display: none; margin-top: 20px; padding: 20px; border: 1px solid #ddd; border-radius: 8px; background: #f9f9f9; }
+        progress { width: 100%; height: 20px; }
+        .stats { display: flex; justify-content: space-between; margin-top: 10px; font-size: 14px; color: #555; }
+        .status-text { margin-top: 15px; font-weight: bold; color: green; }
+        .error-text { margin-top: 15px; font-weight: bold; color: red; }
+    </style>
+</head>
+<body>
+
+    <h2>Tải Video Đa Nền Tảng</h2>
+    
+    <div class="input-group">
+        <input type="text" id="urlInput" placeholder="Dán link video vào đây...">
+        <button onclick="startDownload()" id="downloadBtn">Tải Xuống</button>
+    </div>
+
+    <!-- Khung chứa thanh tiến trình (mặc định ẩn) -->
+    <div class="progress-container" id="progressContainer">
+        <progress id="progressBar" value="0" max="100"></progress>
+        <div class="stats">
+            <span id="percentText">0%</span>
+            <span id="speedText">Đang chờ...</span>
+        </div>
+        <div class="status-text" id="statusText"></div>
+        <div class="error-text" id="errorText"></div>
+    </div>
+
+    <script>
+        // Kết nối WebSocket
+        const ws = new WebSocket("ws://127.0.0.1:8000/ws");
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            
+            if (data.status === "downloading") {
+                // Cập nhật thanh tiến trình
+                let percentValue = parseFloat(data.percent.replace('%', '').trim());
+                document.getElementById("progressBar").value = percentValue;
+                document.getElementById("percentText").innerText = data.percent;
+                document.getElementById("speedText").innerText = data.speed;
+            } 
+            else if (data.status === "finished") {
+                // Sửa lỗi: Khi xong phải đẩy thanh bar lên 100%
+                document.getElementById("progressBar").value = 100;
+                document.getElementById("percentText").innerText = "100%";
+                document.getElementById("speedText").innerText = "";
+                document.getElementById("statusText").innerText = "Tải xuống hoàn tất!";
+                document.getElementById("downloadBtn").disabled = false; // Mở khóa nút
+            }
+            else if (data.status === "error") {
+                // Hiển thị lỗi nếu Backend gửi về (Ví dụ: Link sai, hoặc lỗi yt-dlp)
+                document.getElementById("errorText").innerText = "Lỗi: " + data.message;
+                document.getElementById("downloadBtn").disabled = false;
+            }
+        };
+
+        async function startDownload() {
+            const url = document.getElementById("urlInput").value;
+            if (!url) {
+                alert("Vui lòng nhập link video!");
+                return;
+            }
+
+            // Reset giao diện trước khi tải
+            const btn = document.getElementById("downloadBtn");
+            btn.disabled = true; // Khóa nút để tránh spam
+            document.getElementById("progressContainer").style.display = "block";
+            document.getElementById("progressBar").value = 0;
+            document.getElementById("percentText").innerText = "0%";
+            document.getElementById("statusText").innerText = "Đang kết nối...";
+            document.getElementById("errorText").innerText = "";
+
+            // Gửi yêu cầu tải lên Backend
+            try {
+                const response = await fetch("/api/download", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ url: url })
+                });
+                const result = await response.json();
+                console.log(result);
+            } catch (error) {
+                document.getElementById("errorText").innerText = "Lỗi kết nối đến Server!";
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>
