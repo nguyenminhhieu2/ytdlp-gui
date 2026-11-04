@@ -1,100 +1,625 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tải Video Đa Nền Tảng</title>
-    <style>
-        body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; text-align: center; }
-        .input-group { display: flex; gap: 10px; margin-bottom: 20px; }
-        input[type="text"] { flex: 1; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 5px; }
-        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 5px; }
-        button:disabled { background-color: #ccc; cursor: not-allowed; }
-        .progress-container { display: none; margin-top: 20px; padding: 20px; border: 1px solid #ddd; border-radius: 8px; background: #f9f9f9; }
-        progress { width: 100%; height: 20px; }
-        .stats { display: flex; justify-content: space-between; margin-top: 10px; font-size: 14px; color: #555; }
-        .status-text { margin-top: 15px; font-weight: bold; color: green; }
-        .error-text { margin-top: 15px; font-weight: bold; color: red; }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Tải video chất lượng cao từ YouTube, TikTok và Playlist nhanh chóng, đơn giản." />
+  <title>Tải Video Đa Nền Tảng</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  />
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ["Inter", "ui-sans-serif", "system-ui", "-apple-system", "sans-serif"],
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    :root {
+      color-scheme: dark;
+      --accent: #3b82f6;
+      --track: #1e293b;
+    }
+
+    body {
+      font-family: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+      text-rendering: optimizeLegibility;
+    }
+
+    /* Disabled state: solid gray, no hover override */
+    #downloadBtn:disabled {
+      background-color: #1e293b;
+      color: #94a3b8;
+      cursor: not-allowed;
+    }
+
+    /* Native progress bar */
+    #progressBar {
+      -webkit-appearance: none;
+      appearance: none;
+      display: block;
+      width: 100%;
+      height: 8px;
+      border: 0;
+      border-radius: 4px;
+      overflow: hidden;
+      background-color: var(--track);
+    }
+
+    #progressBar::-webkit-progress-bar {
+      background-color: var(--track);
+      border-radius: 4px;
+    }
+
+    #progressBar::-webkit-progress-value {
+      background-color: var(--accent);
+      border-radius: 4px;
+    }
+
+    #progressBar::-moz-progress-bar {
+      background-color: var(--accent);
+      border-radius: 4px;
+    }
+
+    /* Feedback rows need flex when shown */
+    .feedback-row {
+      display: none;
+    }
+
+    .feedback-row.is-visible {
+      display: flex;
+    }
+
+    #infoLoading {
+      display: none;
+    }
+
+    #infoLoading.is-visible {
+      display: inline-flex;
+    }
+
+    #errorText {
+      overflow-wrap: anywhere;
+    }
+
+    #urlInput[aria-invalid="true"] {
+      border-color: #f87171;
+    }
+
+    /* Connection status dot */
+    .ws-dot {
+      background-color: #64748b;
+    }
+
+    .ws-dot.is-online {
+      background-color: #34d399;
+    }
+
+    .ws-dot.is-offline {
+      background-color: #fbbf24;
+    }
+
+    /* Dark dropdown options */
+    #formatSelect option {
+      background-color: #0f172a;
+      color: #e2e8f0;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
 </head>
-<body>
 
-    <h2>Tải Video Đa Nền Tảng</h2>
-    
-    <div class="input-group">
-        <input type="text" id="urlInput" placeholder="Dán link video vào đây...">
-        <button onclick="startDownload()" id="downloadBtn">Tải Xuống</button>
-    </div>
+<body class="min-h-dvh bg-slate-950 text-slate-100 antialiased">
+  <main class="flex min-h-dvh items-center justify-center px-4 py-10 sm:px-6">
+    <div class="w-full max-w-xl">
+      <!-- Header -->
+      <header class="mb-6">
+        <h1 class="text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+          Tải video đa nền tảng
+        </h1>
+        <p class="mt-2 text-sm leading-relaxed text-slate-400">
+          Dán liên kết, chọn chất lượng và tải video về máy.
+        </p>
+      </header>
 
-<!-- thanh tiến trình -->
-    <div class="progress-container" id="progressContainer">
-        <progress id="progressBar" value="0" max="100"></progress>
-        <div class="stats">
-            <span id="percentText">0%</span>
-            <span id="speedText">Đang chờ...</span>
+      <!-- Main card -->
+      <section class="rounded-xl border border-slate-800 bg-slate-900 p-5 sm:p-6" aria-label="Trình tải video">
+        <form id="downloadForm" class="space-y-4" novalidate>
+          <!-- URL input -->
+          <div>
+            <div class="mb-2 flex items-center justify-between gap-3">
+              <label for="urlInput" class="text-sm font-medium text-slate-200">Liên kết video</label>
+              <span id="infoLoading" class="text-xs text-slate-400">Đang lấy chất lượng…</span>
+            </div>
+
+            <input
+              id="urlInput"
+              name="url"
+              type="url"
+              inputmode="url"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              aria-describedby="urlHint"
+              placeholder="Dán link video YouTube, TikTok, Playlist..."
+              class="h-12 w-full rounded-lg border border-slate-500 bg-slate-950 px-4 text-base text-slate-100 outline-none transition-colors duration-150 placeholder:text-slate-400 hover:border-slate-400 focus:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+            />
+
+            <p id="urlHint" class="mt-2 text-xs leading-relaxed text-slate-400">
+              Hỗ trợ YouTube, TikTok, Facebook và Playlist đa nền tảng.
+            </p>
+          </div>
+
+          <!-- Quality select (hidden until info is loaded) -->
+          <div id="formatWrap" style="display: none">
+            <label for="formatSelect" class="mb-2 block text-sm font-medium text-slate-200">
+              Chất lượng / Định dạng
+            </label>
+            <select
+              id="formatSelect"
+              name="format_id"
+              style="display: none"
+              class="h-12 w-full rounded-lg border border-slate-500 bg-slate-950 px-4 text-base text-slate-100 outline-none transition-colors duration-150 hover:border-slate-400 focus:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+            ></select>
+          </div>
+
+          <!-- Submit -->
+          <button
+            id="downloadBtn"
+            type="submit"
+            class="inline-flex h-12 w-full cursor-pointer items-center justify-center rounded-lg bg-blue-600 px-5 text-base font-medium text-white transition-colors duration-150 hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+          >
+            <span id="downloadBtnLabel">Tải Xuống</span>
+          </button>
+        </form>
+
+        <!-- Progress panel -->
+        <div id="progressContainer" style="display: none" class="mt-5 rounded-lg border border-slate-800 bg-slate-950 p-4">
+          <div id="progressBody" class="space-y-3">
+            <div class="flex items-center justify-between gap-3">
+              <p id="progressTitle" class="text-sm text-slate-300">Đang tải xuống</p>
+              <p id="percentText" class="text-lg font-semibold tabular-nums text-white">0%</p>
+            </div>
+
+            <progress id="progressBar" max="100" value="0" aria-label="Tiến trình tải xuống"></progress>
+
+            <p id="speedText" class="truncate text-sm text-slate-400">Đang chờ...</p>
+          </div>
+
+          <div id="statusRow" class="feedback-row mt-3 items-center gap-2" role="status" aria-live="polite">
+            <svg class="h-4 w-4 shrink-0 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <path d="m9 12 2 2 4-4" />
+            </svg>
+            <p id="statusText" class="text-sm font-medium text-emerald-400"></p>
+          </div>
+
+          <div id="errorRow" class="feedback-row mt-3 items-start gap-2" role="alert">
+            <svg class="mt-0.5 h-4 w-4 shrink-0 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" x2="12" y1="8" y2="12" />
+              <line x1="12" x2="12.01" y1="16" y2="16" />
+            </svg>
+            <p id="errorText" class="text-sm font-medium leading-relaxed text-red-400"></p>
+          </div>
         </div>
-        <div class="status-text" id="statusText"></div>
-        <div class="error-text" id="errorText"></div>
+
+        <!-- Connection status -->
+        <div class="mt-5 flex items-center gap-2 border-t border-slate-800 pt-4 text-xs text-slate-400">
+          <span id="wsDot" class="ws-dot h-2 w-2 rounded-full" aria-hidden="true"></span>
+          <span id="wsStatusText" role="status" aria-live="polite">Đang kết nối máy chủ…</span>
+        </div>
+      </section>
+
+      <!-- Footer -->
+      <footer class="mt-5 text-center text-xs leading-relaxed text-slate-400">
+        <p>Hỗ trợ YouTube, TikTok, Facebook và Playlist.</p>
+        <p class="mt-1">Chỉ tải xuống nội dung bạn sở hữu hoặc được phép tải về.</p>
+      </footer>
     </div>
+  </main>
 
-    <script>
-//Kết nối websocket
-        const ws = new WebSocket("ws://127.0.0.1:8000/ws");
+  <noscript>
+    <p class="fixed bottom-4 left-1/2 -translate-x-1/2 rounded-lg border border-red-900 bg-red-950 px-4 py-2 text-sm text-red-300">
+      Vui lòng bật JavaScript để sử dụng trình tải video.
+    </p>
+  </noscript>
 
-        ws.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-            
-            if (data.status === "downloading") {
-                // Cập nhật thanh tiến trình
-                let percentValue = parseFloat(data.percent.replace('%', '').trim());
-                document.getElementById("progressBar").value = percentValue;
-                document.getElementById("percentText").innerText = data.percent;
-                document.getElementById("speedText").innerText = data.speed;
-            } 
-            else if (data.status === "finished") {
-                document.getElementById("progressBar").value = 100;
-                document.getElementById("percentText").innerText = "100%";
-                document.getElementById("speedText").innerText = "";
-                document.getElementById("statusText").innerText = "Tải xuống hoàn tất!";
-                document.getElementById("downloadBtn").disabled = false; // Mở khóa nút
-            }
-            else if (data.status === "error") {
-                // Hiển thị lỗi nếu Backend gửi về (Ví dụ: Link sai, hoặc lỗi yt-dlp)
-                document.getElementById("errorText").innerText = "Lỗi: " + data.message;
-                document.getElementById("downloadBtn").disabled = false;
-            }
-        };
+  <script>
+    (() => {
+      "use strict";
 
-        async function startDownload() {
-            const url = document.getElementById("urlInput").value;
-            if (!url) {
-                alert("Vui lòng nhập link video!");
-                return;
-            }
+      /* ============ Cấu hình ============ */
+      const WS_URL = "ws://127.0.0.1:8000/ws";
 
-            // Reset giao diện trước khi tải
-            const btn = document.getElementById("downloadBtn");
-            btn.disabled = true; // Khóa nút để tránh spam
-            document.getElementById("progressContainer").style.display = "block";
-            document.getElementById("progressBar").value = 0;
-            document.getElementById("percentText").innerText = "0%";
-            document.getElementById("statusText").innerText = "Đang kết nối...";
-            document.getElementById("errorText").innerText = "";
+      /* ============ DOM ============ */
+      const downloadForm = document.getElementById("downloadForm");
+      const urlInput = document.getElementById("urlInput");
+      const formatWrap = document.getElementById("formatWrap");
+      const formatSelect = document.getElementById("formatSelect");
+      const downloadBtn = document.getElementById("downloadBtn");
+      const downloadBtnLabel = document.getElementById("downloadBtnLabel");
+      const infoLoading = document.getElementById("infoLoading");
 
-            // Gửi yêu cầu tải lên Backend
-            try {
-                const response = await fetch("/api/download", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ url: url })
-                });
-                const result = await response.json();
-                console.log(result);
-            } catch (error) {
-                document.getElementById("errorText").innerText = "Lỗi kết nối đến Server!";
-                btn.disabled = false;
-            }
+      const progressContainer = document.getElementById("progressContainer");
+      const progressBody = document.getElementById("progressBody");
+      const progressTitle = document.getElementById("progressTitle");
+      const progressBar = document.getElementById("progressBar");
+      const percentText = document.getElementById("percentText");
+      const speedText = document.getElementById("speedText");
+      const statusRow = document.getElementById("statusRow");
+      const statusText = document.getElementById("statusText");
+      const errorRow = document.getElementById("errorRow");
+      const errorText = document.getElementById("errorText");
+
+      const wsDot = document.getElementById("wsDot");
+      const wsStatusText = document.getElementById("wsStatusText");
+
+      /* ============ Trạng thái ============ */
+      let infoController = null;
+      let infoRequestId = 0;
+      let lastInfoUrl = "";
+      let infoDebounce = null;
+      let downloadInProgress = false;
+
+      /* ============ Tiện ích UI ============ */
+      function showFormatSelect() {
+        formatWrap.style.display = "block";
+        formatSelect.style.display = "block";
+      }
+
+      function resetFormatSelect() {
+        formatSelect.replaceChildren();
+        formatWrap.style.display = "none";
+        formatSelect.style.display = "none";
+        lastInfoUrl = "";
+      }
+
+      function setInfoLoading(isLoading) {
+        infoLoading.classList.toggle("is-visible", isLoading);
+        urlInput.setAttribute("aria-busy", String(isLoading));
+      }
+
+      function setButtonBusy(isBusy) {
+        downloadBtn.disabled = isBusy;
+        downloadBtn.setAttribute("aria-busy", String(isBusy));
+        downloadBtnLabel.textContent = isBusy ? "Đang xử lý..." : "Tải Xuống";
+      }
+
+      function clearError() {
+        errorText.textContent = "";
+        errorRow.classList.remove("is-visible");
+      }
+
+      function clearStatus() {
+        statusText.textContent = "";
+        statusRow.classList.remove("is-visible");
+      }
+
+      function showError(message, { hideProgressBody = false } = {}) {
+        progressContainer.style.display = "block";
+        progressBody.classList.toggle("hidden", hideProgressBody);
+        clearStatus();
+        errorRow.classList.add("is-visible");
+        errorText.textContent = message;
+      }
+
+      function resetProgressUI() {
+        progressContainer.style.display = "block";
+        progressBody.classList.remove("hidden");
+        progressTitle.textContent = "Đang tải xuống";
+        progressBar.value = 0;
+        percentText.textContent = "0%";
+        speedText.style.display = "";
+        speedText.textContent = "Đang chờ...";
+        clearStatus();
+        clearError();
+      }
+
+      async function getErrorMessage(response, fallback) {
+        try {
+          const body = await response.json();
+          if (body && typeof body.detail === "string") return body.detail;
+          if (body && typeof body.message === "string") return body.message;
+        } catch {
+          /* response không phải JSON */
         }
-    </script>
+        return `${fallback} (mã ${response.status})`;
+      }
+
+      /* ============ Sự kiện 1: Lấy thông tin video ============ */
+      async function fetchVideoInfo() {
+        const url = urlInput.value.trim();
+
+        if (!url) {
+          resetFormatSelect();
+          return;
+        }
+
+        // Tránh gọi lại nếu link không đổi và đã có danh sách chất lượng
+        if (url === lastInfoUrl && formatSelect.options.length > 0) {
+          return;
+        }
+
+        infoController?.abort();
+        const controller = new AbortController();
+        infoController = controller;
+        const requestId = ++infoRequestId;
+
+        setInfoLoading(true);
+
+        try {
+          const response = await fetch("/api/info", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url }),
+            signal: controller.signal,
+          });
+
+          if (!response.ok) {
+            throw new Error(await getErrorMessage(response, "Không thể lấy thông tin video"));
+          }
+
+          const data = await response.json();
+
+          if (requestId !== infoRequestId) return;
+
+          if (data && data.error) {
+            throw new Error(String(data.error));
+          }
+
+          const formats = Array.isArray(data?.formats) ? data.formats : [];
+          if (formats.length === 0) {
+            throw new Error("Không tìm thấy chất lượng phù hợp cho video này.");
+          }
+
+          formatSelect.replaceChildren(
+            ...formats.map((format) => {
+              const option = document.createElement("option");
+              option.value = String(format?.id ?? "");
+              option.textContent = String(format?.label ?? format?.id ?? "Không xác định");
+              return option;
+            })
+          );
+          formatSelect.selectedIndex = 0;
+
+          showFormatSelect();
+          lastInfoUrl = url;
+          urlInput.removeAttribute("aria-invalid");
+          clearError();
+
+          // Nếu panel chỉ đang hiển thị lỗi lấy info thì ẩn đi
+          if (!downloadInProgress && progressBody.classList.contains("hidden")) {
+            progressContainer.style.display = "none";
+          }
+        } catch (error) {
+          if (error.name === "AbortError" || requestId !== infoRequestId) return;
+
+          resetFormatSelect();
+          const message =
+            error instanceof TypeError
+              ? "Không thể kết nối đến máy chủ. Vui lòng kiểm tra lại."
+              : error.message || "Đã xảy ra lỗi khi lấy thông tin video.";
+
+          showError(message, { hideProgressBody: true });
+        } finally {
+          if (requestId === infoRequestId) {
+            setInfoLoading(false);
+          }
+        }
+      }
+
+      /* ============ Sự kiện 2: Bắt đầu tải xuống ============ */
+      async function handleDownload() {
+        if (downloadInProgress) return;
+
+        const url = urlInput.value.trim();
+
+        if (!url) {
+          urlInput.setAttribute("aria-invalid", "true");
+          urlInput.focus();
+          showError("Vui lòng dán liên kết video trước khi tải xuống.", { hideProgressBody: true });
+          return;
+        }
+
+        downloadInProgress = true;
+        urlInput.removeAttribute("aria-invalid");
+        setButtonBusy(true);
+        resetProgressUI();
+
+        try {
+          const response = await fetch("/api/download", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              url,
+              format_id: formatSelect.value || "best",
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error(await getErrorMessage(response, "Không thể bắt đầu tải xuống"));
+          }
+        } catch (error) {
+          downloadInProgress = false;
+          setButtonBusy(false);
+          progressTitle.textContent = "Tải xuống thất bại";
+
+          const message =
+            error instanceof TypeError
+              ? "Không thể kết nối đến máy chủ. Vui lòng kiểm tra kết nối và thử lại."
+              : error.message || "Đã xảy ra lỗi khi bắt đầu tải xuống.";
+
+          showError(message);
+        }
+      }
+
+      /* ============ Sự kiện 3: WebSocket ============ */
+      let socket = null;
+      let reconnectTimer = null;
+      let reconnectDelay = 1000;
+
+      function updateConnectionStatus(isOnline) {
+        wsDot.classList.toggle("is-online", isOnline);
+        wsDot.classList.toggle("is-offline", !isOnline);
+        wsStatusText.textContent = isOnline ? "Máy chủ đã sẵn sàng" : "Đang kết nối lại…";
+      }
+
+      function scheduleReconnect() {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = window.setTimeout(connectWebSocket, reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, 10000);
+      }
+
+      function handleSocketMessage(event) {
+        let data;
+        try {
+          data = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (!data || typeof data !== "object") return;
+
+        if (data.status === "downloading") {
+          const rawPercent = data.percent != null ? String(data.percent).trim() : "";
+          const parsed = Number.parseFloat(rawPercent.replace("%", "").replace(",", "."));
+          const percent = Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : progressBar.value;
+
+          progressBar.value = percent;
+          percentText.textContent = rawPercent || `${Math.round(percent)}%`;
+          speedText.style.display = "";
+          speedText.textContent = data.speed ? String(data.speed).trim() : "Đang chờ...";
+          progressTitle.textContent = "Đang tải xuống";
+          progressContainer.style.display = "block";
+          progressBody.classList.remove("hidden");
+          clearError();
+          return;
+        }
+
+        if (data.status === "finished") {
+          progressContainer.style.display = "block";
+          progressBody.classList.remove("hidden");
+          progressBar.value = 100;
+          percentText.textContent = "100%";
+          speedText.style.display = "none";
+          speedText.textContent = "";
+          progressTitle.textContent = "Hoàn tất";
+          clearError();
+          statusRow.classList.add("is-visible");
+          statusText.textContent = "Tải xuống hoàn tất!";
+
+          downloadInProgress = false;
+          setButtonBusy(false);
+          return;
+        }
+
+        if (data.status === "error") {
+          downloadInProgress = false;
+          setButtonBusy(false);
+          speedText.style.display = "none";
+          progressTitle.textContent = "Tải xuống thất bại";
+          showError(String(data.message || "Đã xảy ra lỗi trong quá trình tải xuống."));
+        }
+      }
+
+      function connectWebSocket() {
+        window.clearTimeout(reconnectTimer);
+
+        try {
+          socket = new WebSocket(WS_URL);
+        } catch {
+          updateConnectionStatus(false);
+          scheduleReconnect();
+          return;
+        }
+
+        socket.addEventListener("open", () => {
+          reconnectDelay = 1000;
+          updateConnectionStatus(true);
+        });
+
+        socket.addEventListener("message", handleSocketMessage);
+
+        socket.addEventListener("error", () => {
+          try {
+            socket?.close();
+          } catch {
+            /* bỏ qua */
+          }
+        });
+
+        socket.addEventListener("close", () => {
+          updateConnectionStatus(false);
+          scheduleReconnect();
+
+          if (downloadInProgress) {
+            downloadInProgress = false;
+            setButtonBusy(false);
+            showError("Mất kết nối tới máy chủ. Vui lòng kiểm tra lại và thử tải lại.");
+          }
+        });
+      }
+
+      /* ============ Gắn sự kiện ============ */
+      urlInput.addEventListener("blur", () => {
+        window.clearTimeout(infoDebounce);
+        void fetchVideoInfo();
+      });
+
+      // Enter: lấy thông tin chất lượng thay vì submit ngay
+      urlInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          urlInput.blur();
+        }
+      });
+
+      urlInput.addEventListener("input", () => {
+        urlInput.removeAttribute("aria-invalid");
+        window.clearTimeout(infoDebounce);
+
+        const url = urlInput.value.trim();
+
+        if (url !== lastInfoUrl) {
+          infoController?.abort();
+          infoRequestId += 1;
+          setInfoLoading(false);
+          resetFormatSelect();
+        }
+
+        // Tự lấy danh sách chất lượng sau khi dán/ngừng nhập link hợp lệ
+        if (/^https?:\/\/\S+$/i.test(url)) {
+          infoDebounce = window.setTimeout(() => {
+            void fetchVideoInfo();
+          }, 700);
+        }
+      });
+
+      downloadForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        void handleDownload();
+      });
+
+      connectWebSocket();
+    })();
+  </script>
 </body>
 </html>
