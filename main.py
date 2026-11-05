@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, BackgroundTasks, WebSocket, WebSocketDisco
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 import os
+import math
 import asyncio
 import yt_dlp
 
@@ -23,18 +24,155 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+
+def _format_size(fmt: dict) -> float | None:
+    """Dung lượng ước tính của một format (byte), nếu yt-dlp có cung cấp."""
+    for key in ("filesize", "filesize_approx"):
+        value = fmt.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            return float(value)
+    return None
+
+
+def _iter_media_parts(info):
+    """Liệt kê các file yt-dlp sẽ tải: (format_id, dung lượng ước tính)."""
+    if not isinstance(info, dict):
+        return
+
+    entries = info.get("entries")
+    if entries is not None and not isinstance(entries, (list, tuple)):
+        # Giữ lại danh sách để lần xử lý tải sau còn dùng được.
+        entries = list(entries)
+        info["entries"] = entries
+
+    if entries or info.get("_type") in ("playlist", "multi_video"):
+        for entry in entries or []:
+            if isinstance(entry, (tuple, list)) and len(entry) == 2:
+                entry = entry[1]
+            yield from _iter_media_parts(entry)
+        return
+
+    formats = info.get("requested_formats")
+    if formats:
+        for fmt in formats:
+            yield str(fmt.get("format_id") or ""), _format_size(fmt)
+    else:
+        yield str(info.get("format_id") or ""), _format_size(info)
+
+
+def _extract_percent(d: dict) -> float | None:
+    value = d.get("_percent")
+    if isinstance(value, (int, float)) and math.isfinite(value):
+        return float(value)
+
+    raw = str(d.get("_percent_str") or "").strip().replace("%", "").replace(",", ".")
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+
+    downloaded = d.get("downloaded_bytes")
+    total = d.get("total_bytes") or d.get("total_bytes_estimate")
+    try:
+        if downloaded is not None and total:
+            return 100.0 * float(downloaded) / float(total)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+class ProgressTracker:
+    """Gộp tiến trình nhiều file (video + audio) thành một giá trị 0-100.
+
+    Trước đây mỗi luồng tải báo % riêng nên khi chuyển từ video sang audio
+    thanh tiến trình bị tụt về 0. Ở đây mỗi file chiếm một phần theo dung
+    lượng ước tính, nhờ đó % tổng chỉ tăng dần.
+    """
+
+    def __init__(self):
+        self.parts: list[dict] = []
+
+    def prepare(self, info: dict) -> None:
+        specs = list(_iter_media_parts(info))
+        if not specs:
+            return
+
+        sizes = [size for _, size in specs]
+        # Thiếu dung lượng thì chia đều để một luồng không chiếm hết thanh %.
+        if all(size is not None for size in sizes):
+            weights = sizes
+        else:
+            weights = [1.0] * len(specs)
+
+        self.parts = [
+            {"format_id": format_id, "weight": weight, "percent": 0.0, "key": None}
+            for (format_id, _), weight in zip(specs, weights)
+        ]
+
+    def update(self, d: dict) -> float | None:
+        if d.get("status") == "finished":
+            target = 100.0
+        else:
+            target = _extract_percent(d)
+            if target is None:
+                return None
+
+        if not self.parts:
+            return min(100.0, max(0.0, target))
+
+        part = self._resolve_part(d)
+        if part is None:
+            return None
+
+        # Trong cùng một luồng, % có thể tụt khi tổng dung lượng ước tính đổi.
+        part["percent"] = max(part["percent"], min(100.0, max(0.0, target)))
+
+        total_weight = sum(p["weight"] for p in self.parts)
+        if total_weight <= 0:
+            return None
+        return sum(p["weight"] * p["percent"] for p in self.parts) / total_weight
+
+    def _resolve_part(self, d: dict):
+        info = d.get("info_dict") or {}
+        format_id = str(info.get("format_id") or "")
+        media_id = str(info.get("id") or info.get("display_id") or "")
+        key = (media_id, format_id) if (media_id or format_id) else str(d.get("filename") or "")
+
+        for part in self.parts:
+            if part["key"] == key:
+                return part
+        for part in self.parts:
+            if part["key"] is None and part["format_id"] == format_id:
+                part["key"] = key
+                return part
+        for part in self.parts:
+            if part["key"] is None:
+                part["key"] = key
+                return part
+        return None
+
+
 #hàm tải video ngầm
 def download_task(url: str, format_id: str, websocket: WebSocket, loop: asyncio.AbstractEventLoop):
+    tracker = ProgressTracker()
+
+    def send(payload: dict):
+        asyncio.run_coroutine_threadsafe(websocket.send_json(payload), loop)
+
     def progress_hook(d):
-        if d['status'] == 'downloading':
-            msg = {
-                "status": "downloading",
-                "percent": d.get('_percent_str', '0%').strip(),
-                "speed": d.get('_speed_str', 'N/A').strip()
-            }
-            asyncio.run_coroutine_threadsafe(websocket.send_json(msg), loop)
-        elif d['status'] == 'finished':
-            asyncio.run_coroutine_threadsafe(websocket.send_json({"status": "finished"}), loop)
+        status = d.get("status")
+        if status not in ("downloading", "finished"):
+            return
+
+        percent = tracker.update(d)
+        if percent is None:
+            return
+
+        send({
+            "status": "downloading",
+            "percent": f"{percent:.1f}%",
+            "speed": str(d.get("_speed_str") or "N/A").strip(),
+        })
 
     #cấu hình cho mp3 và video ( người dùng chọn )
     if format_id == 'mp3':
@@ -49,6 +187,7 @@ def download_task(url: str, format_id: str, websocket: WebSocket, loop: asyncio.
             'progress_hooks': [progress_hook],
             'cookiefile': 'cookies.txt',
             'quiet': True,
+            'color': 'no_color'
         }
     else:
         if not format_id or format_id == 'best':
@@ -62,13 +201,24 @@ def download_task(url: str, format_id: str, websocket: WebSocket, loop: asyncio.
             'progress_hooks': [progress_hook],
             'cookiefile': 'cookies.txt',
             'quiet': True,
+            'color': 'no_color',
         }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+            # Lấy thông tin trước để biết có bao nhiêu file (video + audio)
+            # và dung lượng từng file, phục vụ việc gộp tiến trình.
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                raise RuntimeError("Không lấy được thông tin video")
+            tracker.prepare(info)
+            ydl.process_ie_result(info, download=True)
     except Exception as e:
-        asyncio.run_coroutine_threadsafe(websocket.send_json({"status": "error", "message": str(e)}), loop)
+        send({"status": "error", "message": str(e)})
+        return
+
+    # Chỉ báo hoàn tất sau khi tất cả luồng (và bước ghép) đã xong.
+    send({"status": "finished"})
 
 # api routes 
 @app.get("/", response_class=HTMLResponse)

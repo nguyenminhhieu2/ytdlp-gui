@@ -228,6 +228,23 @@
 
       const WS_URL = "ws://127.0.0.1:8000/ws";
 
+      // yt-dlp có thể trả về chuỗi chứa mã màu ANSI (ESC[...m) trong thông báo lỗi,
+      // tốc độ hoặc phần trăm. Trình duyệt không hiểu các mã này nên hiển thị
+      // thành ký tự lạ, vì vậy loại bỏ chúng trước khi đưa vào giao diện.
+      const ANSI_ESCAPE_RE =
+        /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+
+      function stripAnsi(value) {
+        return String(value ?? "")
+          .replace(ANSI_ESCAPE_RE, "")
+          // Bỏ nốt ESC đơn lẻ và các ký tự điều khiển C0/C1 còn sót lại.
+          .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, "");
+      }
+
+      function cleanText(value) {
+        return stripAnsi(value).trim();
+      }
+
       const downloadForm = document.getElementById("downloadForm");
       const urlInput = document.getElementById("urlInput");
       const formatWrap = document.getElementById("formatWrap");
@@ -255,6 +272,8 @@
       let lastInfoUrl = "";
       let infoDebounce = null;
       let downloadInProgress = false;
+      // Mức % cao nhất đã đạt trong lượt tải hiện tại, tránh thanh tiến trình giật lùi.
+      let progressValue = 0;
 
       function showFormatSelect() {
         formatWrap.style.display = "block";
@@ -301,13 +320,14 @@
 
         clearStatus();
         errorRow.classList.add("is-visible");
-        errorText.textContent = message;
+        errorText.textContent = cleanText(message);
       }
 
       function resetProgressUI() {
         progressContainer.style.display = "block";
         progressBody.classList.remove("hidden");
         progressTitle.textContent = "Đang tải xuống";
+        progressValue = 0;
         progressBar.value = 0;
         percentText.textContent = "0%";
         speedText.style.display = "";
@@ -363,7 +383,7 @@
             ...formats.map((format) => {
               const option = document.createElement("option");
               option.value = String(format?.id ?? "");
-              option.textContent = String(format?.label ?? format?.id ?? "Không xác định");
+              option.textContent = cleanText(format?.label ?? format?.id ?? "Không xác định");
               return option;
             })
           );
@@ -454,14 +474,20 @@
         if (!data || typeof data !== "object") return;
 
         if (data.status === "downloading") {
-          const rawPercent = data.percent != null ? String(data.percent).trim() : "";
+          const rawPercent = data.percent != null ? cleanText(data.percent) : "";
           const parsed = Number.parseFloat(rawPercent.replace("%", "").replace(",", "."));
-          const percent = Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : progressBar.value;
+          const percent = Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : progressValue;
+          // Backend đã gộp video + audio, nhưng vẫn chặn tụt do dung lượng ước tính thay đổi.
+          const displayedPercent = Math.max(progressValue, percent);
+          progressValue = displayedPercent;
 
-          progressBar.value = percent;
-          percentText.textContent = rawPercent || `${Math.round(percent)}%`;
+          progressBar.value = displayedPercent;
+          percentText.textContent =
+            displayedPercent > percent || !rawPercent
+              ? `${Math.round(displayedPercent)}%`
+              : rawPercent;
           speedText.style.display = "";
-          speedText.textContent = data.speed ? String(data.speed).trim() : "Đang chờ...";
+          speedText.textContent = data.speed ? cleanText(data.speed) : "Đang chờ...";
           progressTitle.textContent = "Đang tải xuống";
           progressContainer.style.display = "block";
           progressBody.classList.remove("hidden");
@@ -472,6 +498,7 @@
         if (data.status === "finished") {
           progressContainer.style.display = "block";
           progressBody.classList.remove("hidden");
+          progressValue = 100;
           progressBar.value = 100;
           percentText.textContent = "100%";
           speedText.style.display = "none";

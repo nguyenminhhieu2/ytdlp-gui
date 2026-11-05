@@ -1,21 +1,23 @@
 # Tải Video Đa Nền Tảng
 
-Ứng dụng web tải video/âm thanh từ YouTube, TikTok, Facebook, Playlist và nhiều nền tảng khác, được xây dựng bằng **FastAPI + yt-dlp**, hiển thị tiến trình tải theo thời gian thực qua **WebSocket**.
+Ứng dụng web tải video/âm thanh từ YouTube, TikTok, Facebook, Playlist và nhiều nền tảng khác. Backend dùng **FastAPI + yt-dlp**, giao diện **HTML + Tailwind CSS + JavaScript**, tiến trình tải được đẩy về trình duyệt theo thời gian thực qua **WebSocket**.
 
 ## Tính năng
 
-- Dán liên kết video và tự động lấy danh sách chất lượng khả dụng.
+- Dán liên kết video để tự động lấy tiêu đề và danh sách chất lượng khả dụng.
 - Chọn chất lượng video (từ 144p đến độ phân giải cao nhất) hoặc chỉ tải âm thanh dạng MP3 (192 kbps).
 - Hiển thị tiến trình tải (phần trăm, tốc độ) theo thời gian thực qua WebSocket.
+- Gộp tiến trình các luồng video + audio thành một giá trị 0–100% duy nhất; thanh % chỉ tăng, không bị giật lùi khi chuyển luồng.
+- Chỉ báo "Hoàn tất" sau khi tất cả luồng đã tải và ghép xong; nút tải được khoá trong suốt quá trình.
 - Tự động kết nối lại WebSocket khi mất kết nối (backoff lũy tiến, tối đa 10 giây).
-- Xử lý lỗi rõ ràng trên giao diện: URL không hợp lệ, lỗi máy chủ, lỗi yt-dlp.
-- Giao diện tối, responsive, có hỗ trợ `prefers-reduced-motion` và các thuộc tính accessibility (`aria-live`, `aria-busy`...).
+- Xử lý lỗi rõ ràng trên giao diện và tự loại bỏ mã màu ANSI từ thông báo của yt-dlp.
+- Hỗ trợ video đơn lẻ và Playlist nhiều mục.
 
 ## Công nghệ sử dụng
 
 | Thành phần | Công nghệ |
 |---|---|
-| Backend | FastAPI, Uvicorn, Python 3.10 |
+| Backend | FastAPI, Uvicorn, Python 3.10+ |
 | Tải video | yt-dlp, FFmpeg (ghép video + audio, chuyển sang MP3) |
 | Giao tiếp realtime | WebSocket (`/ws`) |
 | Frontend | HTML + Tailwind CSS (CDN) + JavaScript thuần |
@@ -72,7 +74,7 @@ uvicorn main:app --reload --host 127.0.0.1 --port 8000
 
 Sau đó mở trình duyệt tại: **http://127.0.0.1:8000**
 
-> Lưu ý: frontend đang cấu hình cứng WebSocket tới `ws://127.0.0.1:8000/ws` (trong `templates/index.html`). Nếu đổi host/port, cần cập nhật biến `WS_URL` hoặc chạy đúng cổng `8000`.
+> Lưu ý: frontend đang cấu hình cứng WebSocket tới `ws://127.0.0.1:8000/ws` (biến `WS_URL` trong `templates/index.html`). Nếu đổi host/port, cần cập nhật biến này hoặc chạy đúng cổng `8000`.
 
 ## Hướng dẫn sử dụng
 
@@ -81,6 +83,14 @@ Sau đó mở trình duyệt tại: **http://127.0.0.1:8000**
 3. Chọn chất lượng mong muốn (hoặc **Chỉ tải Âm thanh (MP3)**).
 4. Nhấn **Tải Xuống** và theo dõi tiến trình.
 5. File hoàn tất được lưu trong thư mục `downloads/`.
+
+## Cách hoạt động
+
+- Khi người dùng dán URL, frontend gọi `/api/info` để lấy danh sách chất lượng.
+- Khi nhấn **Tải Xuống**, `/api/download` chạy tác vụ tải trong nền; kết quả và tiến trình được đẩy về qua WebSocket.
+- Với chất lượng cao, yt-dlp tải **video-only và audio thành hai file riêng** rồi ghép bằng FFmpeg. Backend theo dõi từng file, tính trọng số theo dung lượng ước tính và cộng dồn thành một phần trăm tổng (kể cả Playlist nhiều mục), nhờ đó thanh tiến trình không bị tụt khi chuyển luồng.
+- yt-dlp được cấu hình tắt màu ANSI (`color: no_color`); frontend cũng lọc bỏ mã ANSI trước khi hiển thị để tránh ký tự lạ.
+- Bản tin `finished` chỉ được gửi sau khi toàn bộ quá trình tải và ghép hoàn tất.
 
 ## API
 
@@ -108,7 +118,7 @@ Lấy tiêu đề và danh sách chất lượng của video.
 Khi có lỗi, API trả về `{ "error": "mô tả lỗi" }`.
 
 ### `POST /api/download`
-Bắt đầu tải video trong nền. Kết quả và tiến trình được đẩy về client qua WebSocket.
+Bắt đầu tải video trong nền và trả về ngay `{ "message": "Đang tải..." }`. Tiến trình và kết quả được đẩy về client qua WebSocket.
 
 ```json
 {
@@ -118,13 +128,16 @@ Bắt đầu tải video trong nền. Kết quả và tiến trình được đ�
 ```
 
 ### `WebSocket /ws`
-Client kết nối để nhận tiến trình tải. Các bản tin từ server:
+Client kết nối để nhận tiến trình. Server gửi các bản tin:
 
 ```json
 { "status": "downloading", "percent": "42.3%", "speed": "1.25MiB/s" }
 { "status": "finished" }
 { "status": "error", "message": "mô tả lỗi" }
 ```
+
+- `percent` là tiến trình **tổng** của tất cả file trong lượt tải (video, audio và các mục trong Playlist), không phải phần trăm riêng của từng luồng.
+- `finished` chỉ được gửi **một lần**, sau khi tải và ghép xong.
 
 ## Cookies (nội dung cần đăng nhập / giới hạn tuổi)
 
@@ -137,5 +150,5 @@ Client kết nối để nhận tiến trình tải. Các bản tin từ server:
 ## Lưu ý
 
 - Dự án phục vụ mục đích học tập. Chỉ tải nội dung bạn sở hữu hoặc được phép tải về; tuân thủ điều khoản dịch vụ của từng nền tảng và quy định bản quyền.
-- Hiện tại server chỉ ghi nhận **WebSocket gần nhất** đang kết nối (`manager.active_connections[-1]`), phù hợp cho sử dụng cá nhân một phiên. Nếu triển khai nhiều người dùng đồng thời, cần ánh xạ WebSocket theo từng phiên/tác vụ.
+- Server chỉ ghi nhận **WebSocket gần nhất** đang kết nối (`manager.active_connections[-1]`) và chỉ bắt đầu tải khi có kết nối WebSocket, phù hợp cho sử dụng cá nhân một phiên. Nếu triển khai nhiều người dùng đồng thời, cần ánh xạ WebSocket theo từng phiên/tác vụ.
 - Các file tải về nằm trong `downloads/` và không được đẩy lên Git.
