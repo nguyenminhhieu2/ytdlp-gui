@@ -38,14 +38,12 @@
       text-rendering: optimizeLegibility;
     }
 
-    /* Disabled state: solid gray, no hover override */
     #downloadBtn:disabled {
       background-color: #1e293b;
       color: #94a3b8;
       cursor: not-allowed;
     }
 
-    /* Native progress bar */
     #progressBar {
       -webkit-appearance: none;
       appearance: none;
@@ -73,7 +71,6 @@
       border-radius: 4px;
     }
 
-    /* Feedback rows need flex when shown */
     .feedback-row {
       display: none;
     }
@@ -98,7 +95,6 @@
       border-color: #f87171;
     }
 
-    /* Connection status dot */
     .ws-dot {
       background-color: #64748b;
     }
@@ -111,16 +107,13 @@
       background-color: #fbbf24;
     }
 
-    /* Dark dropdown options */
     #formatSelect option {
       background-color: #0f172a;
       color: #e2e8f0;
     }
 
     @media (prefers-reduced-motion: reduce) {
-      *,
-      *::before,
-      *::after {
+      *, *::before, *::after {
         transition-duration: 0.01ms !important;
       }
     }
@@ -130,7 +123,6 @@
 <body class="min-h-dvh bg-slate-950 text-slate-100 antialiased">
   <main class="flex min-h-dvh items-center justify-center px-4 py-10 sm:px-6">
     <div class="w-full max-w-xl">
-      <!-- Header -->
       <header class="mb-6">
         <h1 class="text-2xl font-semibold tracking-tight text-white sm:text-3xl">
           Tải video đa nền tảng
@@ -140,10 +132,8 @@
         </p>
       </header>
 
-      <!-- Main card -->
       <section class="rounded-xl border border-slate-800 bg-slate-900 p-5 sm:p-6" aria-label="Trình tải video">
         <form id="downloadForm" class="space-y-4" novalidate>
-          <!-- URL input -->
           <div>
             <div class="mb-2 flex items-center justify-between gap-3">
               <label for="urlInput" class="text-sm font-medium text-slate-200">Liên kết video</label>
@@ -168,7 +158,6 @@
             </p>
           </div>
 
-          <!-- Quality select (hidden until info is loaded) -->
           <div id="formatWrap" style="display: none">
             <label for="formatSelect" class="mb-2 block text-sm font-medium text-slate-200">
               Chất lượng / Định dạng
@@ -181,7 +170,6 @@
             ></select>
           </div>
 
-          <!-- Submit -->
           <button
             id="downloadBtn"
             type="submit"
@@ -191,7 +179,6 @@
           </button>
         </form>
 
-        <!-- Progress panel -->
         <div id="progressContainer" style="display: none" class="mt-5 rounded-lg border border-slate-800 bg-slate-950 p-4">
           <div id="progressBody" class="space-y-3">
             <div class="flex items-center justify-between gap-3">
@@ -222,14 +209,12 @@
           </div>
         </div>
 
-        <!-- Connection status -->
         <div class="mt-5 flex items-center gap-2 border-t border-slate-800 pt-4 text-xs text-slate-400">
           <span id="wsDot" class="ws-dot h-2 w-2 rounded-full" aria-hidden="true"></span>
           <span id="wsStatusText" role="status" aria-live="polite">Đang kết nối máy chủ…</span>
         </div>
       </section>
 
-      <!-- Footer -->
       <footer class="mt-5 text-center text-xs leading-relaxed text-slate-400">
         <p>Hỗ trợ YouTube, TikTok, Facebook và Playlist.</p>
         <p class="mt-1">Chỉ tải xuống nội dung bạn sở hữu hoặc được phép tải về.</p>
@@ -237,20 +222,12 @@
     </div>
   </main>
 
-  <noscript>
-    <p class="fixed bottom-4 left-1/2 -translate-x-1/2 rounded-lg border border-red-900 bg-red-950 px-4 py-2 text-sm text-red-300">
-      Vui lòng bật JavaScript để sử dụng trình tải video.
-    </p>
-  </noscript>
-
   <script>
     (() => {
       "use strict";
 
-      /* ============ Cấu hình ============ */
       const WS_URL = "ws://127.0.0.1:8000/ws";
 
-      /* ============ DOM ============ */
       const downloadForm = document.getElementById("downloadForm");
       const urlInput = document.getElementById("urlInput");
       const formatWrap = document.getElementById("formatWrap");
@@ -273,14 +250,12 @@
       const wsDot = document.getElementById("wsDot");
       const wsStatusText = document.getElementById("wsStatusText");
 
-      /* ============ Trạng thái ============ */
       let infoController = null;
       let infoRequestId = 0;
       let lastInfoUrl = "";
       let infoDebounce = null;
       let downloadInProgress = false;
 
-      /* ============ Tiện ích UI ============ */
       function showFormatSelect() {
         formatWrap.style.display = "block";
         formatSelect.style.display = "block";
@@ -314,9 +289,16 @@
         statusRow.classList.remove("is-visible");
       }
 
+      // FIX 1: Cải thiện logic hiển thị lỗi để không bị nhầm lẫn với tiến trình tải
       function showError(message, { hideProgressBody = false } = {}) {
         progressContainer.style.display = "block";
         progressBody.classList.toggle("hidden", hideProgressBody);
+        
+        // Nếu là lỗi lấy info, đổi title để người dùng hiểu
+        if (hideProgressBody) {
+            progressTitle.textContent = "Thông báo lỗi";
+        }
+
         clearStatus();
         errorRow.classList.add("is-visible");
         errorText.textContent = message;
@@ -339,25 +321,19 @@
           const body = await response.json();
           if (body && typeof body.detail === "string") return body.detail;
           if (body && typeof body.message === "string") return body.message;
-        } catch {
-          /* response không phải JSON */
-        }
+          if (body && typeof body.error === "string") return body.error;
+        } catch {}
         return `${fallback} (mã ${response.status})`;
       }
 
-      /* ============ Sự kiện 1: Lấy thông tin video ============ */
       async function fetchVideoInfo() {
         const url = urlInput.value.trim();
-
         if (!url) {
           resetFormatSelect();
           return;
         }
 
-        // Tránh gọi lại nếu link không đổi và đã có danh sách chất lượng
-        if (url === lastInfoUrl && formatSelect.options.length > 0) {
-          return;
-        }
+        if (url === lastInfoUrl && formatSelect.options.length > 0) return;
 
         infoController?.abort();
         const controller = new AbortController();
@@ -374,22 +350,14 @@
             signal: controller.signal,
           });
 
-          if (!response.ok) {
-            throw new Error(await getErrorMessage(response, "Không thể lấy thông tin video"));
-          }
+          if (!response.ok) throw new Error(await getErrorMessage(response, "Không thể lấy thông tin video"));
 
           const data = await response.json();
-
           if (requestId !== infoRequestId) return;
-
-          if (data && data.error) {
-            throw new Error(String(data.error));
-          }
+          if (data && data.error) throw new Error(String(data.error));
 
           const formats = Array.isArray(data?.formats) ? data.formats : [];
-          if (formats.length === 0) {
-            throw new Error("Không tìm thấy chất lượng phù hợp cho video này.");
-          }
+          if (formats.length === 0) throw new Error("Không tìm thấy chất lượng phù hợp cho video này.");
 
           formatSelect.replaceChildren(
             ...formats.map((format) => {
@@ -406,31 +374,23 @@
           urlInput.removeAttribute("aria-invalid");
           clearError();
 
-          // Nếu panel chỉ đang hiển thị lỗi lấy info thì ẩn đi
           if (!downloadInProgress && progressBody.classList.contains("hidden")) {
             progressContainer.style.display = "none";
           }
         } catch (error) {
           if (error.name === "AbortError" || requestId !== infoRequestId) return;
-
           resetFormatSelect();
-          const message =
-            error instanceof TypeError
+          const message = error instanceof TypeError
               ? "Không thể kết nối đến máy chủ. Vui lòng kiểm tra lại."
               : error.message || "Đã xảy ra lỗi khi lấy thông tin video.";
-
           showError(message, { hideProgressBody: true });
         } finally {
-          if (requestId === infoRequestId) {
-            setInfoLoading(false);
-          }
+          if (requestId === infoRequestId) setInfoLoading(false);
         }
       }
 
-      /* ============ Sự kiện 2: Bắt đầu tải xuống ============ */
       async function handleDownload() {
         if (downloadInProgress) return;
-
         const url = urlInput.value.trim();
 
         if (!url) {
@@ -439,6 +399,11 @@
           showError("Vui lòng dán liên kết video trước khi tải xuống.", { hideProgressBody: true });
           return;
         }
+
+        // FIX 2: Hủy bỏ tiến trình lấy info đang chạy dở (nếu có) để tránh đè giao diện
+        infoController?.abort();
+        infoRequestId += 1;
+        setInfoLoading(false);
 
         downloadInProgress = true;
         urlInput.removeAttribute("aria-invalid");
@@ -455,24 +420,18 @@
             }),
           });
 
-          if (!response.ok) {
-            throw new Error(await getErrorMessage(response, "Không thể bắt đầu tải xuống"));
-          }
+          if (!response.ok) throw new Error(await getErrorMessage(response, "Không thể bắt đầu tải xuống"));
         } catch (error) {
           downloadInProgress = false;
           setButtonBusy(false);
           progressTitle.textContent = "Tải xuống thất bại";
-
-          const message =
-            error instanceof TypeError
+          const message = error instanceof TypeError
               ? "Không thể kết nối đến máy chủ. Vui lòng kiểm tra kết nối và thử lại."
               : error.message || "Đã xảy ra lỗi khi bắt đầu tải xuống.";
-
           showError(message);
         }
       }
 
-      /* ============ Sự kiện 3: WebSocket ============ */
       let socket = null;
       let reconnectTimer = null;
       let reconnectDelay = 1000;
@@ -491,11 +450,7 @@
 
       function handleSocketMessage(event) {
         let data;
-        try {
-          data = JSON.parse(event.data);
-        } catch {
-          return;
-        }
+        try { data = JSON.parse(event.data); } catch { return; }
         if (!data || typeof data !== "object") return;
 
         if (data.status === "downloading") {
@@ -525,7 +480,6 @@
           clearError();
           statusRow.classList.add("is-visible");
           statusText.textContent = "Tải xuống hoàn tất!";
-
           downloadInProgress = false;
           setButtonBusy(false);
           return;
@@ -542,10 +496,7 @@
 
       function connectWebSocket() {
         window.clearTimeout(reconnectTimer);
-
-        try {
-          socket = new WebSocket(WS_URL);
-        } catch {
+        try { socket = new WebSocket(WS_URL); } catch {
           updateConnectionStatus(false);
           scheduleReconnect();
           return;
@@ -559,17 +510,12 @@
         socket.addEventListener("message", handleSocketMessage);
 
         socket.addEventListener("error", () => {
-          try {
-            socket?.close();
-          } catch {
-            /* bỏ qua */
-          }
+          try { socket?.close(); } catch {}
         });
 
         socket.addEventListener("close", () => {
           updateConnectionStatus(false);
           scheduleReconnect();
-
           if (downloadInProgress) {
             downloadInProgress = false;
             setButtonBusy(false);
@@ -578,13 +524,11 @@
         });
       }
 
-      /* ============ Gắn sự kiện ============ */
       urlInput.addEventListener("blur", () => {
         window.clearTimeout(infoDebounce);
         void fetchVideoInfo();
       });
 
-      // Enter: lấy thông tin chất lượng thay vì submit ngay
       urlInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
           event.preventDefault();
@@ -595,21 +539,15 @@
       urlInput.addEventListener("input", () => {
         urlInput.removeAttribute("aria-invalid");
         window.clearTimeout(infoDebounce);
-
         const url = urlInput.value.trim();
-
         if (url !== lastInfoUrl) {
           infoController?.abort();
           infoRequestId += 1;
           setInfoLoading(false);
           resetFormatSelect();
         }
-
-        // Tự lấy danh sách chất lượng sau khi dán/ngừng nhập link hợp lệ
         if (/^https?:\/\/\S+$/i.test(url)) {
-          infoDebounce = window.setTimeout(() => {
-            void fetchVideoInfo();
-          }, 700);
+          infoDebounce = window.setTimeout(() => { void fetchVideoInfo(); }, 700);
         }
       });
 
