@@ -39,7 +39,7 @@ doan-videodownloader/
 ## Yêu cầu hệ thống
 
 - **Python 3.14 trở lên** (khuyến nghị dùng bản mới nhất).
-- **FFmpeg — bắt buộc,**cần cài độc lập và đảm bảo lệnh `ffmpeg` có trong `PATH`.
+- **FFmpeg — bắt buộc**,cần cài độc lập và đảm bảo lệnh `ffmpeg` có trong `PATH`.
 
   Hướng dẫn cài:
   - **Windows:** tải tại [ffmpeg.org](https://ffmpeg.org/download.html) (hoặc [gyan.dev](https://www.gyan.dev/ffmpeg/builds/)), giải nén và thêm thư mục `bin` vào `PATH`.
