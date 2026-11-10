@@ -1,14 +1,22 @@
-from fastapi import FastAPI, Request, BackgroundTasks, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request, BackgroundTasks, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 import os
+import re
 import math
 import asyncio
 import yt_dlp
 
 app = FastAPI()
-os.makedirs("downloads", exist_ok=True)
-templates = Jinja2Templates(directory="templates")
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DOWNLOADS_DIR = os.path.join(BASE_DIR, "downloads")
+COOKIES_FILE = os.path.join(BASE_DIR, "cookies.txt")
+os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+
+AUDIO_BITRATES = {"128", "192", "320"}
+PLAYLIST_ITEMS_RE = re.compile(r"\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*")
 
 #quản lý websocket
 class ConnectionManager:
@@ -25,8 +33,88 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+def _cookie_options() -> dict:
+    """Chỉ đọc cookies.txt khi file đã tồn tại.
+
+    yt-dlp luôn ghi lại cookiefile khi đóng (kể cả file chưa có), nên nếu
+    truyền 'cookiefile' vô điều kiện thì nó sẽ tự tạo cookies.txt.
+    """
+    if os.path.isfile(COOKIES_FILE):
+        return {'cookiefile': COOKIES_FILE}
+    return {}
+
+
+def _normalize_playlist_items(raw) -> str:
+    """Chuẩn hoá chuỗi chọn mục playlist, ví dụ "1-5, 10" -> "1-5,10"."""
+    items = re.sub(r"\s+", "", str(raw or ""))
+    if items and not PLAYLIST_ITEMS_RE.fullmatch(items):
+        raise ValueError("Khoảng video không hợp lệ. Ví dụ hợp lệ: 1-5, 10, 15")
+    return items
+
+
+def _snapshot_downloads() -> dict[str, tuple[int, int]]:
+    """Chụp trạng thái thư mục downloads để phát hiện file mới sau khi tải."""
+    snapshot = {}
+    for root, _dirs, files in os.walk(DOWNLOADS_DIR):
+        for name in files:
+            path = os.path.join(root, name)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            snapshot[path] = (stat.st_mtime_ns, stat.st_size)
+    return snapshot
+
+
+_TEMP_SUFFIXES = (".part", ".ytdl", ".temp", ".tmp")
+
+
+def _is_download_output(path: str) -> bool:
+    name = os.path.basename(path).lower()
+    return not name.startswith(".") and not name.endswith(_TEMP_SUFFIXES)
+
+
+def _iter_info_entries(info):
+    """Duyệt đệ quy video đơn hoặc các mục trong playlist."""
+    if not isinstance(info, dict):
+        return
+
+    entries = info.get("entries")
+    if entries:
+        for entry in entries:
+            if isinstance(entry, (tuple, list)) and len(entry) == 2:
+                entry = entry[1]
+            yield from _iter_info_entries(entry)
+        return
+
+    yield info
+
+
+def _is_inside_downloads(path: str) -> bool:
+    """Chỉ cho phép truy cập file nằm trong thư mục downloads."""
+    root = os.path.normcase(os.path.realpath(DOWNLOADS_DIR))
+    target = os.path.normcase(os.path.realpath(path))
+    try:
+        return os.path.commonpath([root, target]) == root
+    except ValueError:
+        return False
+
+
+def _remove_downloaded_file(path: str) -> None:
+    """Xóa file sau khi trình duyệt đã nhận xong."""
+    if not _is_inside_downloads(path):
+        return
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        # File đang bị khóa hoặc đã bị xóa bởi request khác.
+        pass
+
+
 def _format_size(fmt: dict) -> float | None:
-    """Dung lượng ước tính của một format (byte), nếu yt-dlp có cung cấp."""
+    """Dung lượng ước tính của một format (byte)."""
     for key in ("filesize", "filesize_approx"):
         value = fmt.get(key)
         if isinstance(value, (int, float)) and value > 0:
@@ -83,10 +171,6 @@ def _extract_percent(d: dict) -> float | None:
 
 class ProgressTracker:
     """Gộp tiến trình nhiều file (video + audio) thành một giá trị 0-100.
-
-    Trước đây mỗi luồng tải báo % riêng nên khi chuyển từ video sang audio
-    thanh tiến trình bị tụt về 0. Ở đây mỗi file chiếm một phần theo dung
-    lượng ước tính, nhờ đó % tổng chỉ tăng dần.
     """
 
     def __init__(self):
@@ -153,14 +237,30 @@ class ProgressTracker:
 
 
 #hàm tải video ngầm
-def download_task(url: str, format_id: str, websocket: WebSocket, loop: asyncio.AbstractEventLoop):
+def download_task(
+    url: str,
+    format_id: str,
+    websocket: WebSocket,
+    loop: asyncio.AbstractEventLoop,
+    subtitles: bool = False,
+    audio_bitrate: str = "192",
+    playlist_items: str = "",
+):
     tracker = ProgressTracker()
+    final_paths: set[str] = set()
 
     def send(payload: dict):
         asyncio.run_coroutine_threadsafe(websocket.send_json(payload), loop)
 
+    def remember(path):
+        if path:
+            final_paths.add(os.path.abspath(str(path)))
+
     def progress_hook(d):
         status = d.get("status")
+        if status == "finished":
+            # File của luồng video/audio hiện tại (trước khi ghép hoặc chuyển MP3).
+            remember(d.get("filename"))
         if status not in ("downloading", "finished"):
             return
 
@@ -174,20 +274,42 @@ def download_task(url: str, format_id: str, websocket: WebSocket, loop: asyncio.
             "speed": str(d.get("_speed_str") or "N/A").strip(),
         })
 
+    def postprocessor_hook(d):
+        # Sau khi ghép/chuyển MP3, info_dict["filepath"] là file cuối cùng.
+        if d.get("status") != "finished":
+            return
+        info_dict = d.get("info_dict") or {}
+        remember(d.get("filename") or info_dict.get("filepath"))
+
+    common_opts = {
+        'outtmpl': os.path.join(DOWNLOADS_DIR, '%(title)s.%(ext)s'),
+        'progress_hooks': [progress_hook],
+        'postprocessor_hooks': [postprocessor_hook],
+        'quiet': True,
+        'color': 'no_color'
+    }
+
+    if subtitles:
+        common_opts.update({
+            'writesubtitles': True,
+            'writeautomaticsub': True,
+            'subtitleslangs': ['vi', 'en'],
+            'subtitlesformat': 'srt/vtt/best',
+        })
+
+    if playlist_items:
+        common_opts['playlist_items'] = playlist_items
+
     #cấu hình cho mp3 và video ( người dùng chọn )
     if format_id == 'mp3':
         ydl_opts = {
+            **common_opts,
             'format': 'bestaudio/best',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
-                'preferredquality': '192',
+                'preferredquality': audio_bitrate,
             }],
-            'outtmpl': 'downloads/%(title)s.%(ext)s',
-            'progress_hooks': [progress_hook],
-            'cookiefile': 'cookies.txt',
-            'quiet': True,
-            'color': 'no_color'
         }
     else:
         if not format_id or format_id == 'best':
@@ -196,13 +318,11 @@ def download_task(url: str, format_id: str, websocket: WebSocket, loop: asyncio.
             # Format video-only cần ghép thêm audio; fallback cho format đã có sẵn audio
             format_selector = f"{format_id}+bestaudio/{format_id}/best"
         ydl_opts = {
+            **common_opts,
             'format': format_selector,
-            'outtmpl': 'downloads/%(title)s.%(ext)s',
-            'progress_hooks': [progress_hook],
-            'cookiefile': 'cookies.txt',
-            'quiet': True,
-            'color': 'no_color',
         }
+
+    before_download = _snapshot_downloads()
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -213,20 +333,88 @@ def download_task(url: str, format_id: str, websocket: WebSocket, loop: asyncio.
                 raise RuntimeError("Không lấy được thông tin video")
             tracker.prepare(info)
             ydl.process_ie_result(info, download=True)
+
+            # Đường dẫn cuối cùng có thể đã được postprocessor cập nhật.
+            for entry in _iter_info_entries(info):
+                remember(entry.get("filepath"))
+                for request in entry.get("requested_downloads") or []:
+                    if isinstance(request, dict):
+                        remember(request.get("filepath"))
+
+                try:
+                    prepared_path = str(ydl.prepare_filename(entry) or "")
+                except Exception:
+                    prepared_path = ""
+
+                if prepared_path:
+                    remember(prepared_path)
+                    # File MP3 cuối cùng (kể cả khi yt-dlp bỏ qua vì file đã tồn tại).
+                    if format_id == 'mp3':
+                        remember(f"{os.path.splitext(prepared_path)[0]}.mp3")
+
+                # Phụ đề được ghi cạnh file media, ví dụ: "Tên video.vi.vtt".
+                media_path = entry.get("filepath") or prepared_path
+                base_path = os.path.splitext(str(media_path))[0] if media_path else ""
+                if base_path:
+                    for lang, subtitle in (entry.get("requested_subtitles") or {}).items():
+                        if isinstance(subtitle, dict):
+                            remember(f"{base_path}.{lang}.{subtitle.get('ext') or 'vtt'}")
     except Exception as e:
         send({"status": "error", "message": str(e)})
         return
 
+    # Phụ đề (và file cũ bị ghi đè) có thể không phát progress hook,
+    # nên đối chiếu thư mục trước/sau để bổ sung.
+    after_download = _snapshot_downloads()
+    for path, stamp in after_download.items():
+        if before_download.get(path) != stamp:
+            remember(path)
+
+    files = []
+    for path in sorted(final_paths):
+        if not os.path.isfile(path) or not _is_inside_downloads(path) or not _is_download_output(path):
+            continue
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        files.append({
+            "name": os.path.basename(path),
+            "path": os.path.relpath(path, DOWNLOADS_DIR).replace(os.sep, "/"),
+            "size": size,
+        })
+
     # Chỉ báo hoàn tất sau khi tất cả luồng (và bước ghép) đã xong.
-    send({"status": "finished"})
+    send({"status": "finished", "files": files})
 
 # api routes 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse(request, "index.html")
 
+def _iter_video_infos(info):
+    """Duyệt video đơn hoặc từng video trong playlist."""
+    if not isinstance(info, dict):
+        return
+
+    entries = info.get("entries")
+    if entries:
+        for entry in entries:
+            if isinstance(entry, (tuple, list)) and len(entry) == 2:
+                entry = entry[1]
+            yield from _iter_video_infos(entry)
+        return
+
+    if info.get("formats"):
+        yield info
+
+
 def pick_video_formats(info: dict) -> list[dict]:
-    """Gom format video theo độ phân giải, ưu tiên fps cao rồi tới MP4/H.264."""
+    """Gom format video theo độ phân giải, ưu tiên fps cao rồi tới MP4/H.264.
+
+    Playlist không có "formats" ở cấp cao nhất, nên duyệt các video bên trong
+    để gom đủ độ phân giải (hợp của tất cả mục) thay vì chỉ hiện "best"/MP3.
+    """
     best_by_height: dict[int, dict] = {}
 
     def score(f: dict) -> tuple:
@@ -239,21 +427,22 @@ def pick_video_formats(info: dict) -> list[dict]:
             float(f.get("tbr") or f.get("vbr") or 0),
         )
 
-    for f in info.get("formats", []):
-        if str(f.get("vcodec") or "none") == "none":
-            continue
+    for video in _iter_video_infos(info):
+        for f in video.get("formats", []):
+            if str(f.get("vcodec") or "none") == "none":
+                continue
 
-        try:
-            height = int(f.get("height") or 0)
-        except (TypeError, ValueError):
-            continue
+            try:
+                height = int(f.get("height") or 0)
+            except (TypeError, ValueError):
+                continue
 
-        if height <= 0:
-            continue
+            if height <= 0:
+                continue
 
-        current = best_by_height.get(height)
-        if current is None or score(f) > score(current):
-            best_by_height[height] = f
+            current = best_by_height.get(height)
+            if current is None or score(f) > score(current):
+                best_by_height[height] = f
 
     formats = [{"id": "best", "label": "Chất lượng tốt nhất (tự động)"}]
 
@@ -278,7 +467,7 @@ async def get_video_info(request: Request):
         return {"error": "Chưa có URL"}
 
     def extract_info():
-        ydl_opts = {'quiet': True, 'cookiefile': 'cookies.txt'}
+        ydl_opts = {'quiet': True, **_cookie_options()}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
 
@@ -292,16 +481,55 @@ async def get_video_info(request: Request):
 @app.post("/api/download")
 async def start_download(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
-    url = data.get("url")
-    format_id = data.get("format_id", "best")
-    
+    url = (data.get("url") or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Chưa có URL")
+
+    format_id = data.get("format_id") or "best"
+
+    audio_bitrate = str(data.get("audio_bitrate") or "192")
+    if audio_bitrate not in AUDIO_BITRATES:
+        audio_bitrate = "192"
+
+    try:
+        playlist_items = _normalize_playlist_items(data.get("playlist_items") or "")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    subtitles = bool(data.get("subtitles"))
+
     loop = asyncio.get_running_loop()
     websocket = manager.active_connections[-1] if manager.active_connections else None
-    
+
     if websocket:
-        background_tasks.add_task(asyncio.to_thread, download_task, url, format_id, websocket, loop)
-    
+        background_tasks.add_task(
+            asyncio.to_thread,
+            download_task, url, format_id, websocket, loop,
+            subtitles, audio_bitrate, playlist_items,
+        )
+
     return {"message": "Đang tải..."}
+
+
+@app.get("/api/file")
+async def download_file(path: str, background_tasks: BackgroundTasks):
+    """Gửi file đã tải về trình duyệt; chỉ cho phép file trong thư mục downloads.
+
+    Sau khi response được gửi xong, BackgroundTasks sẽ xóa file khỏi server.
+    """
+    relative = (path or "").replace("\\", "/").lstrip("/")
+    candidate = os.path.abspath(os.path.join(DOWNLOADS_DIR, relative))
+
+    if (
+        not relative
+        or not _is_inside_downloads(candidate)
+        or not os.path.isfile(candidate)
+        or not _is_download_output(candidate)
+    ):
+        raise HTTPException(status_code=404, detail="Không tìm thấy file")
+
+    background_tasks.add_task(_remove_downloaded_file, candidate)
+    return FileResponse(candidate, filename=os.path.basename(candidate))
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
